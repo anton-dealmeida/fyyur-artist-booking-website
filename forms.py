@@ -96,6 +96,11 @@ def validate_phone(form, field):
         raise ValidationErr("Invalid phone number.")
 
 
+def validate_facebook_link(form, field):
+    if not 'facebook.com' in field.data:
+        raise ValidationErr("Not a valid facebook link.")
+
+
 class ShowForm(Form):
     artist_id = StringField(
         'artist_id'
@@ -136,7 +141,7 @@ class VenueForm(Form):
         choices=genres
     )
     facebook_link = StringField(
-        'facebook_link', validators=[URL()]
+        'facebook_link', validators=[URL(), validate_facebook_link]
     )
     website_link = StringField(
         'website_link'
@@ -173,7 +178,9 @@ class ArtistForm(Form):
     )
     facebook_link = StringField(
         # TODO implement enum restriction
-        'facebook_link', validators=[URL()]
+        # removed these validators completely, facebook_link input isn't rendering for some reason.
+        # NOTE - removing html input id facebook_link reveals the hidden input...
+        'facebook_link', validators=[URL(), validate_facebook_link]
     )
 
     website_link = StringField(
