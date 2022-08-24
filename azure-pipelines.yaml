@@ -15,5 +15,4 @@ jobs:
           buildContext: "$(Build.SourcesDirectory)"
           command: "buildAndPush"
           Dockerfile: "./docker/Dockerfile"
-          tags: $(Build.BuildId)
-            latest
+          tags: latest
