@@ -1,0 +1,16 @@
+trigger:
+  branches:
+    include:
+      - master
+
+name: 0.0.$(Rev:r)
+
+jobs:
+  - job: build_push
+    steps:
+      - task: Docker@2
+        inputs:
+          Dockerfile: ./docker/Dockerfile
+          buildContext: $(Build.SourcesDirectory)
+          command: buildAndPush
+          repository: ghcr.io/anton-dealmeida/fyyur-artist-website:$(Build.Id)
