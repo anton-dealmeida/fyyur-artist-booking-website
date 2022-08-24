@@ -10,7 +10,8 @@ jobs:
     steps:
       - task: Docker@2
         inputs:
-          Dockerfile: ./docker/Dockerfile
-          buildContext: $(Build.SourcesDirectory)
-          command: buildAndPush
-          repository: ghcr.io/anton-dealmeida/fyyur-artist-website:$(Build.Id)
+          containerRegistry: 'ghcr-packages-registry'
+          repository: 'ghcr.io/anton-dealmeida/fyyur-artist-website:$(Build.Id)'
+          command: 'buildAndPush'
+          Dockerfile: './docker/Dockerfile'
+          buildContext: '$(Build.SourcesDirectory)'
