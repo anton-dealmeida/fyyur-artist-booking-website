@@ -2,23 +2,20 @@
 # Imports
 #----------------------------------------------------------------------------#
 
-import array
-from ctypes import addressof
-import json
+from flask_migrate import Migrate
+from forms import *
+from logging import Formatter, FileHandler
+import logging
+from sqlalchemy import func
+from flask_sqlalchemy import SQLAlchemy
+from flask_moment import Moment
 import re
-import string
-from tracemalloc import start
 import dateutil.parser
 import babel
-from flask import Flask, render_template, request, Response, flash, redirect, url_for
-from flask_moment import Moment
-from flask_sqlalchemy import SQLAlchemy
-from sqlalchemy import func
-import logging
-from logging import Formatter, FileHandler
-from flask_wtf import Form
-from forms import *
-from flask_migrate import Migrate
+from flask import (Flask, render_template, request,
+                   flash, redirect, url_for)
+
+from models import db, Artist, Venue, Show
 
 #----------------------------------------------------------------------------#
 # App Config.
@@ -33,87 +30,6 @@ db = SQLAlchemy(app)
 # This is done in the config.py and imported on line 21 using app.config.from_object('config')
 # This will import settings I define there, this is a best practice for python
 migrate = Migrate(app, db)
-
-#----------------------------------------------------------------------------#
-# Models.
-#----------------------------------------------------------------------------#
-
-
-class BaseModel(db.Model):
-    __abstract__ = True
-
-    def __init__(self) -> None:
-        super().__init__()
-
-    def __repr__(self) -> str:
-        items = ("%s: %r" % (key, value)
-                 for key, value in self.__dict__.items() if not key.startswith('_'))
-        return "<%s: {%s}>" % (self.__class__.__name__, ', '.join(items))
-
-    # convers entire model to a dictionary
-    def to_dict(self) -> dict:
-        return {c.name: getattr(self, c.name) for c in self.__table__.columns}
-
-
-class Venue(BaseModel):
-    __tablename__ = 'Venue'
-
-    id = db.Column(db.Integer, primary_key=True)
-    name = db.Column(db.String)
-    city = db.Column(db.String(120))
-    state = db.Column(db.String(120))
-    address = db.Column(db.String(120))
-    phone = db.Column(db.String(120))
-    image_link = db.Column(db.String(500))
-    facebook_link = db.Column(db.String(120))
-
-    # Implement any missing fields, as a database migration using Flask-Migrate
-    description = db.Column(db.String(), default='')
-    seeking_talent = db.Column(db.Boolean, default=False)
-    website = db.Column(db.String())
-    genres = db.Column(db.String())
-    shows = db.relationship('Show', backref='Venue', lazy='dynamic')
-
-    def summarized_dict(self) -> dict:
-        return {'id': self.id, 'name': self.name}
-
-    def dict(self) -> dict:
-        return {'id': self.id, 'name': self.name, 'city': self.city, 'state': self.state}
-
-
-class Artist(BaseModel):
-    __tablename__ = 'Artist'
-
-    id = db.Column(db.Integer, primary_key=True)
-    name = db.Column(db.String)
-    city = db.Column(db.String(120))
-    state = db.Column(db.String(120))
-    phone = db.Column(db.String(120))
-    genres = db.Column(db.String(120))
-    image_link = db.Column(db.String(500))
-    facebook_link = db.Column(db.String(120))
-
-    # Implement any missing fields, as a database migration using Flask-Migrate
-    seeking_venue = db.Column(db.Boolean, default=False)
-    seeking_description = db.Column(db.String(), default='')
-    website = db.Column(db.String())
-    shows = db.relationship('Show', backref='Artist', lazy=True)
-
-# Implement Show and Artist models, and complete all model relationships and properties, as a database migration.
-
-
-class Show(BaseModel):
-    __tablename__ = 'Show'
-    id = db.Column(db.Integer, primary_key=True, autoincrement=True)
-    venue_id = db.Column(
-        db.Integer,
-        db.ForeignKey('Venue.id'), primary_key=True
-    )
-    artist_id = db.Column(
-        db.Integer,
-        db.ForeignKey('Artist.id'), primary_key=True
-    )
-    start_time = db.Column(db.String(), nullable=False)
 
 #----------------------------------------------------------------------------#
 # Filters.
@@ -251,35 +167,47 @@ def create_venue_submission():
     # to_dict(flat=False) returns key: [value] dictionary.
     # Need to flatten the values if array of values has 1 value only.
     data = request.form.to_dict(flat=False)
-    try:
-        venue = Venue()
 
-        print(data)
+    # used for form validation to ensure the form submitted is valid.
+    form = VenueForm(request.form, meta={"csrf": False})
+    if data:
+        if form.validate():
+            try:
+                venue = Venue()
 
-        for k, v in data.items():
-            # ternary operator that returns v as an array if its key like genres or it has more than 1 value in the list
-            setattr(
-                venue, 'description' if k == 'seeking_description' else 'website' if 'website' in k else k,
-                # ternary operator that joins array into string if the key is genre
-                v if k.find('genres') != -1
-                # also returns True if value is y and False if it's not y on seeking_venue
-                else True if v[0] == 'y' else False if k.find('seeking_talent') != -1
-                # alternatively flatten the object if there's only 1 value in the array
-                else v[0]
-            )
-        print(venue.to_dict())
+                # generically extract form data after form validation.
+                for k, v in data.items():
+                    # ternary operator that returns v as an array if its key like genres or it has more than 1 value in the list
+                    setattr(
+                        venue, 'description' if k == 'seeking_description' else 'website' if 'website' in k else k,
+                        # ternary operator that joins array into string if the key is genre
+                        v if k.find('genres') != -1
+                        # also returns True if value is y and False if it's not y on seeking_venue
+                        else True if v[0] == 'y' else False if k.find('seeking_talent') != -1
+                        # alternatively flatten the object if there's only 1 value in the array
+                        else v[0]
+                    )
 
-        db.session.add(venue)
-        db.session.commit()
-        # on successful db insert, flash success
+                db.session.add(venue)
+                db.session.commit()
+                # on successful db insert, flash success
 
-        flash('Venue "' + venue.name + '" was successfully listed!')
-    except Exception as e:
-        db.session.rollback()
-        # On unsuccessful db insert, flash an error instead.
-        flash(f'An error occurred. Venue could not be listed. Error: {e}')
-    finally:
-        db.session.close()
+                flash('Venue "' + venue.name + '" was successfully listed!')
+            except Exception as e:
+                db.session.rollback()
+                # On unsuccessful db insert, flash an error instead.
+                flash(
+                    f'An error occurred. Venue could not be listed. Error: {e}')
+            finally:
+                db.session.close()
+        else:
+            message = []
+            for field, err in form.errors.items():
+                message.append(field + ' ' + '|'.join(err))
+            flash('Errors ' + str(message))
+    else:
+        flash('Form submitted was empty.')
+
     return render_template('pages/home.html')
 
 
