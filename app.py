@@ -2,7 +2,8 @@
 # Imports
 #----------------------------------------------------------------------------#
 
-from flask_migrate import Migrate
+from dataclasses import asdict
+from flask_migrate import Migrate, upgrade
 from forms import *
 from logging import Formatter, FileHandler
 import logging
@@ -24,12 +25,13 @@ from models import db, Artist, Venue, Show
 app = Flask(__name__)
 moment = Moment(app)
 app.config.from_object('config')
-db = SQLAlchemy(app)
+db.init_app(app=app)
 
 # Connect to a local postgresql database
-# This is done in the config.py and imported on line 21 using app.config.from_object('config')
+# This is done in the config.py and imported on above using app.config.from_object('config')
 # This will import settings I define there, this is a best practice for python
 migrate = Migrate(app, db)
+
 
 #----------------------------------------------------------------------------#
 # Filters.
@@ -164,49 +166,37 @@ def create_venue_submission():
     # Insert form data as a new Venue record in the db, instead
     # Modify data to be the data object returned from db insertion
 
-    # to_dict(flat=False) returns key: [value] dictionary.
-    # Need to flatten the values if array of values has 1 value only.
-    data = request.form.to_dict(flat=False)
-
     # used for form validation to ensure the form submitted is valid.
     form = VenueForm(request.form, meta={"csrf": False})
-    if data:
-        if form.validate():
-            try:
-                venue = Venue()
 
-                # generically extract form data after form validation.
-                for k, v in data.items():
-                    # ternary operator that returns v as an array if its key like genres or it has more than 1 value in the list
-                    setattr(
-                        venue, 'description' if k == 'seeking_description' else 'website' if 'website' in k else k,
-                        # ternary operator that joins array into string if the key is genre
-                        v if k.find('genres') != -1
-                        # also returns True if value is y and False if it's not y on seeking_venue
-                        else True if v[0] == 'y' else False if k.find('seeking_talent') != -1
-                        # alternatively flatten the object if there's only 1 value in the array
-                        else v[0]
-                    )
+    # to_dict(flat=False) returns key: [value] dictionary.
+    # Need to flatten the values if array of values has 1 value only.
 
-                db.session.add(venue)
-                db.session.commit()
-                # on successful db insert, flash success
+    if form.validate():
+        try:
+            venue = Venue()
 
-                flash('Venue "' + venue.name + '" was successfully listed!')
-            except Exception as e:
-                db.session.rollback()
-                # On unsuccessful db insert, flash an error instead.
-                flash(
-                    f'An error occurred. Venue could not be listed. Error: {e}')
-            finally:
-                db.session.close()
-        else:
-            message = []
-            for field, err in form.errors.items():
-                message.append(field + ' ' + '|'.join(err))
-            flash('Errors ' + str(message))
+            form.populate_obj(venue)
+
+            db.session.add(venue)
+            db.session.commit()
+            # on successful db insert, flash success
+
+            flash('Venue "' + venue.name +
+                  '" was successfully listed!')
+
+        except Exception as e:
+            db.session.rollback()
+            # On unsuccessful db insert, flash an error instead.
+            flash(
+                f'An error occurred. Venue could not be listed. Error: {e}')
+        finally:
+            db.session.close()
     else:
-        flash('Form submitted was empty.')
+        message = []
+        for field, err in form.errors.items():
+            message.append(field + ' ' + '|'.join(err))
+        flash('Errors ' + str(message))
 
     return render_template('pages/home.html')
 
@@ -265,23 +255,26 @@ def show_artist(artist_id):
     if artist_id:
         data = Artist.to_dict(query)
 
-        print(data)
-
-        shows_query = Show.query.join(Venue, full=True).join(Artist, full=True).with_entities(
+        shows_query = Show.query.filter_by(artist_id=artist_id).join(Venue, full=True).join(Artist, full=True).with_entities(
             Venue.id, Venue.name, Show.start_time, Venue.image_link
-        ).filter_by(id=artist_id).all()
+        ).all()
+
+        print(shows_query)
 
         req = dict(('website' if 'website' in k else k, v)
                    for k, v in data.items())
 
         data = req
 
-        data['genres'] = re.split(',', data['genres'])
+        # genres have been reverted to an array of strings.
+        # data['genres'] = re.split(',', data['genres'])
 
         upcoming_shows, past_shows, current_show = [], [], {}
+
         for id, venue, start_time, venue_image_link in shows_query:
             current_show = {'venue_id': id, 'venue_name': venue,
                             'venue_image_link': venue_image_link, 'start_time': start_time}
+            print(current_show)
             if start_time > ct:
                 upcoming_shows.append(current_show)
             else:
@@ -295,8 +288,6 @@ def show_artist(artist_id):
                 'past_shows_count': len(past_shows)
             }
         )
-
-        print(data)
 
         return render_template('pages/show_artist.html', artist=data)
     return render_template('errors/404.html'), 404
@@ -333,42 +324,21 @@ def edit_artist(artist_id):
 def edit_artist_submission(artist_id):
     # Take values from the form submitted, and update existing
     # artist record with ID <artist_id> using the new attributes
-    form = ArtistForm(request.form)
+    form = ArtistForm(request.form, meta={'csrf': False})
 
     data = Artist.query.filter_by(id=artist_id).first()
 
     if data:
         if form.validate():
             try:
-                # this consistency annoyed me - having website in the template pages as the property field but
-                # website_link for the same thing in the forms!! :\
-                form_dict = request.form.to_dict(flat=False)
+                artist = Artist()
+                artist = data
+                form.populate_obj(artist)
 
-                # rename website_link to website
-                req = dict(('website' if 'website' in k else k, v)
-                           for k, v in form_dict.items())
-
-                if not hasattr(req.items(), 'seeking_venue'):
-                    setattr(data, 'seeking_venue', False)
-
-                print(req.items())
-
-                for k, v in req.items():
-                    setattr(
-                        data, k,
-                        # ternary operator that joins array into string if the key is genre
-                        ','.join(v) if k.find('genres') != -1
-                        # also returns True if value is y and False if it's not y on seeking_venue
-                        else (True if v[0] == 'y' else False) if k.find('seeking_venue') != -1
-                        # alternatively flatten the object if there's only 1 value in the array
-                        else v[0]
-                    )
-
-                print(data)
-
-                db.session.merge(data)
+                db.session.merge(artist)
                 db.session.commit()
             except Exception as e:
+                db.session.rollback()
                 print(e)
 
             return redirect(url_for('show_artist', artist_id=artist_id))
@@ -386,19 +356,14 @@ def edit_venue(venue_id):
     query = Venue.query.get(venue_id)
     if query:
         data = Venue.to_dict(query)
-        # rename website to website_link
-        req = dict(('website_link' if 'website' in k else k, v)
-                   for k, v in data.items())
 
-        for k, v in req.items():
+        for k, v in data.items():
             if k == 'id':
                 continue
             if k == 'description':
                 form[f'seeking_{k}'].data = v
             else:
                 form[f'{k}'].data = v
-
-        print(data)
 
         return render_template('forms/edit_venue.html', form=form, venue=data)
     else:
@@ -411,35 +376,20 @@ def edit_venue_submission(venue_id):
     # Take values from the form submitted, and update existing
     # venue record with ID <venue_id> using the new attributes
 
-    form = VenueForm(request.form)
+    form = VenueForm(request.form, meta={'csrf': False})
     data = Venue.query.filter_by(id=venue_id).first()
 
     if data:
         if form.validate():
             try:
-                form_dict = request.form.to_dict(flat=False)
+                venue = Venue()
+                venue = data
+                form.populate_obj(venue)
 
-                # rename website_link to website
-                req = dict(('website' if 'website' in k else k, v)
-                           for k, v in form_dict.items())
-
-                if not hasattr(req.items(), 'seeking_talent'):
-                    print('there is talent being sought!')
-                    setattr(data, 'seeking_talent', False)
-
-                for k, v in req.items():
-                    setattr(
-                        data, k,
-                        v if k.find('genres') != -1
-                        # handling form truthy/falsy submission
-                        else (True if 'y' in v[0] else False) if k.find('seeking_talent') != -1
-                        else v[0] if len(v) == 1
-                        else v
-                    )
-
-                db.session.merge(data)
+                db.session.merge(venue)
                 db.session.commit()
             except Exception as e:
+                db.session.rollback()
                 print(e)
 
             return redirect(url_for('show_venue', venue_id=venue_id))
@@ -462,31 +412,34 @@ def create_artist_submission():
     # called upon submitting the new artist listing form
     # Insert form data as a new Venue record in the db, instead
     # Modify data to be the data object returned from db insertion
-    data = request.form.to_dict(flat=False)
-    try:
-        artist = Artist()
+    # data = request.form.to_dict(flat=False)
 
-        for k, v in data.items():
-         # ternary operator that returns v as an array if its key like genres or it has more than 1 value in the list
-            setattr(
-                artist, 'website' if 'website' in k else k,
-                # ternary operator that joins array into string if the key is genre
-                ','.join(v) if k.find('genres') != -1
-                # also returns True if value is y and False if it's not y on seeking_venue
-                else True if v[0] == 'y' else False if k.find('seeking_venue') != -1
-                # alternatively flatten the object if there's only 1 value in the array
-                else v[0]
+    # unpack request.form into ArtistForm object for validation and error handling
+    form = ArtistForm(request.form, meta={"csrf": False})
+
+    if form.validate():
+        try:
+            artist = Artist()
+
+            print(form.data)
+
+            form.populate_obj(artist)
+
+            db.session.add(artist)
+            db.session.commit()
+
+            # on successful db insert, flash success
+            flash(f'Artist {artist.name} was successfully listed!')
+        except Exception as e:
+            db.session.rollback()
+            flash(
+                f'An error occurred. Artist {form.name.data} could not be listed. Error: {e} '
             )
-
-        db.session.add(artist)
-        db.session.commit()
-
-        # on successful db insert, flash success
-        flash(f'Artist {artist.name} was successfully listed!')
-    except Exception as e:
-        flash(
-            f'An error occurred. Artist {data.get("name")} could not be listed. Error: {e} '
-        )
+    else:
+        message = []
+        for field, err in form.errors.items():
+            message.append(field + ' ' + '|'.join(err))
+        flash('Errors ' + str(message))
 
     return render_template('pages/home.html')
 
@@ -531,25 +484,26 @@ def create_show_submission():
 
     # called to create new shows in the db, upon submitting new show listing form
     # Insert form data as a new Show record in the db, instead
-    data = request.form.to_dict()
-    try:
-        print(data)
+    form = ShowForm(request.form, meta={"csrf": False})
+    if form.validate():
+        try:
+            show = Show()
+            form.populate_obj(show)
 
-        show = Show()
+            db.session.add(show)
+            db.session.commit()
 
-        print(data.items())
-        for k, v in data.items():
-            setattr(show, k, v)
+            flash(f'Show successfully booked for {show.start_time}!')
+        except Exception as e:
+            db.session.rollback()
+            flash(f'An error occurred. Show could not be listed. Error: {e} ')
 
-        db.session.add(show)
-        db.session.commit()
-
-        flash(f'Show successfully booked for {show.start_time}!')
-
-    except Exception as e:
-        flash(f'An error occurred. Show could not be listed. Error: {e}')
-
-    return render_template('pages/home.html')
+        return render_template('pages/home.html')
+    else:
+        message = []
+        for field, err in form.errors.items():
+            message.append(field + ' ' + '|'.join(err))
+        flash('Errors ' + str(message))
 
 
 @ app.errorhandler(404)
